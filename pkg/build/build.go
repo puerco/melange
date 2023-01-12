@@ -306,6 +306,7 @@ type Context struct {
 	Runner             container.Runner
 	imgDigest          name.Digest
 	containerConfig    *container.Config
+	buildSBOMPath      string
 }
 
 type Dependencies struct {
@@ -355,6 +356,15 @@ func New(opts ...Option) (*Context, error) {
 			return nil, fmt.Errorf("unable to create workspace dir: %w", err)
 		}
 		ctx.WorkspaceDir = tmpdir
+	}
+
+	if ctx.buildSBOMPath == "" {
+		path, err := os.CreateTemp("", "build-sbom-*.json.spdx")
+		if err != nil {
+			return nil, fmt.Errorf("creating temporary file to hold build env SBOM: %w", err)
+		}
+		path.Close() // nolint:errcheck
+		ctx.buildSBOMPath = path.Name()
 	}
 
 	// If no config file is explicitly requested for the build context
