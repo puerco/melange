@@ -47,6 +47,7 @@ type generatorImplementation interface {
 	ScanLicenses(*Spec, *bom) error
 	ReadDependencyData(*Spec, *bom, string) error
 	WriteSBOM(*Spec, *bom) error
+	CopyBuildSBOM(*Spec) error
 }
 
 type defaultGeneratorImplementation struct{}
@@ -74,6 +75,36 @@ func (di *defaultGeneratorImplementation) GenerateDocument(spec *Spec) (*bom, er
 		Packages: []pkg{},
 		Files:    []file{},
 	}, nil
+}
+
+// CopyBuildSBOM copies the build environment SBOM to the apk filesystem
+func (di *defaultGeneratorImplementation) CopyBuildSBOM(spec *Spec) error {
+	data, err := os.ReadFile(spec.BuildEnvSBOM)
+	if err != nil {
+		return fmt.Errorf("opening build environment SBOM: %w", err)
+	}
+
+	dirPath, err := filepath.Abs(spec.Path)
+	if err != nil {
+		return fmt.Errorf("getting absolute directory path: %w", err)
+	}
+
+	apkSBOMdir := "/var/lib/db/sbom"
+	if err := os.MkdirAll(filepath.Join(dirPath, apkSBOMdir), os.FileMode(0755)); err != nil {
+		return fmt.Errorf("creating SBOM directory in apk filesystem: %w", err)
+	}
+
+	// Copy the build SBOM to the apk
+	buildSBOMpath := filepath.Join(
+		dirPath, apkSBOMdir,
+		fmt.Sprintf("%s-%s.spdx.json", spec.PackageName, spec.PackageVersion),
+	)
+
+	if err := os.WriteFile(buildSBOMpath, data, os.FileMode(0o644)); err != nil {
+		return fmt.Errorf("writing build sbom to apk: %w", err)
+	}
+
+	return nil
 }
 
 // GenerateAPKPackage generates the sbom package representing the apk
