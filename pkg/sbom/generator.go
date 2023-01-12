@@ -41,6 +41,7 @@ type Spec struct {
 	Copyright      string
 	Namespace      string
 	Arch           string
+	BuildEnvSBOM   string
 	Languages      []string
 }
 
@@ -59,6 +60,10 @@ func (g *Generator) GenerateSBOM(spec *Spec) error {
 	if !shouldRun {
 		// log "Not generating SBOM"
 		return nil
+	}
+
+	if err := g.impl.CopyBuildSBOM(spec); err != nil {
+		return fmt.Errorf("parsing build environment SBOM: %w", err)
 	}
 
 	sbomDoc, err := g.impl.GenerateDocument(spec)
