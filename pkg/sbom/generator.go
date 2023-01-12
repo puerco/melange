@@ -14,7 +14,10 @@
 
 package sbom
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+)
 
 func NewGenerator() (*Generator, error) {
 	return &Generator{
@@ -43,6 +46,27 @@ type Spec struct {
 	Arch           string
 	BuildEnvSBOM   string
 	Languages      []string
+}
+
+const apkSBOMdir = "/var/lib/db/sbom"
+
+// SBOMPath returns the full path to the SBOM directory in the apk. It will
+// creating it if it does not exist.
+func (spec *Spec) SBOMPath() string {
+	dirPath, _ := filepath.Abs(spec.Path) // This is checked before
+	return filepath.Join(dirPath, apkSBOMdir)
+}
+
+func (spec *Spec) PackageSBOM() string {
+	return filepath.Join(
+		spec.SBOMPath(), fmt.Sprintf("%s-%s.spdx.json", spec.PackageName, spec.PackageVersion),
+	)
+}
+
+func (spec *Spec) BuildSBOM() string {
+	return filepath.Join(
+		spec.SBOMPath(), fmt.Sprintf("%s-%s-build.spdx.json", spec.PackageName, spec.PackageVersion),
+	)
 }
 
 type Generator struct {
