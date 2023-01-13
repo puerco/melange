@@ -44,7 +44,7 @@ type Spec struct {
 	Copyright      string
 	Namespace      string
 	Arch           string
-	BuildEnvSBOM   string
+	BuildImageSBOM string
 	Languages      []string
 }
 
@@ -63,7 +63,7 @@ func (spec *Spec) PackageSBOM() string {
 	)
 }
 
-func (spec *Spec) BuildSBOM() string {
+func (spec *Spec) BuildEnvSBOM() string {
 	return filepath.Join(
 		spec.SBOMPath(), fmt.Sprintf("%s-%s-build.spdx.json", spec.PackageName, spec.PackageVersion),
 	)
@@ -87,7 +87,7 @@ func (g *Generator) GenerateSBOM(spec *Spec) error {
 	}
 
 	if err := g.impl.CopyBuildSBOM(spec); err != nil {
-		return fmt.Errorf("parsing build environment SBOM: %w", err)
+		return fmt.Errorf("copying buildenv SBOM to apk: %w", err)
 	}
 
 	sbomDoc, err := g.impl.GenerateDocument(spec)

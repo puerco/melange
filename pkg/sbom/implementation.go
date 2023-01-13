@@ -67,6 +67,19 @@ func (di *defaultGeneratorImplementation) CheckEnvironment(spec *Spec) (bool, er
 		return false, fmt.Errorf("checking if workind directory exists: %w", err)
 	}
 
+	// Create the apk sbom directory
+	sbomPath := spec.SBOMPath()
+	_, err = os.Stat(sbomPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return false, fmt.Errorf("checking for sbom directory: %w", err)
+		}
+
+		if err := os.MkdirAll(sbomPath, os.FileMode(0755)); err != nil {
+			return false, fmt.Errorf("creating SBOM directory in apk filesystem: %w", err)
+		}
+	}
+
 	return true, nil
 }
 
@@ -79,28 +92,12 @@ func (di *defaultGeneratorImplementation) GenerateDocument(spec *Spec) (*bom, er
 
 // CopyBuildSBOM copies the build environment SBOM to the apk filesystem
 func (di *defaultGeneratorImplementation) CopyBuildSBOM(spec *Spec) error {
-	data, err := os.ReadFile(spec.BuildEnvSBOM)
+	data, err := os.ReadFile(filepath.Join(spec.BuildImageSBOM, fmt.Sprintf("sbom-%s.spdx.json", spec.Arch)))
 	if err != nil {
-		return fmt.Errorf("opening build environment SBOM: %w", err)
+		return fmt.Errorf("reading build environment SBOM from %s: %w", spec.BuildImageSBOM, err)
 	}
 
-	dirPath, err := filepath.Abs(spec.Path)
-	if err != nil {
-		return fmt.Errorf("getting absolute directory path: %w", err)
-	}
-
-	apkSBOMdir := "/var/lib/db/sbom"
-	if err := os.MkdirAll(filepath.Join(dirPath, apkSBOMdir), os.FileMode(0755)); err != nil {
-		return fmt.Errorf("creating SBOM directory in apk filesystem: %w", err)
-	}
-
-	// Copy the build SBOM to the apk
-	buildSBOMpath := filepath.Join(
-		dirPath, apkSBOMdir,
-		fmt.Sprintf("%s-%s.spdx.json", spec.PackageName, spec.PackageVersion),
-	)
-
-	if err := os.WriteFile(buildSBOMpath, data, os.FileMode(0o644)); err != nil {
+	if err := os.WriteFile(spec.BuildEnvSBOM(), data, os.FileMode(0o644)); err != nil {
 		return fmt.Errorf("writing build sbom to apk: %w", err)
 	}
 
@@ -429,6 +426,61 @@ func buildDocumentSPDX(spec *Spec, doc *bom) (*spdx.Document, error) {
 	return &spdxDoc, nil
 }
 
+// ParseBuildSBOM parses the build environment SBOM and incorporates the packages
+// into the general apk sbom.
+func (di *defaultGeneratorImplementation) ParseBuildSBOM(spec *Spec, apkSBOM *spdx.Document) error {
+	data, err := os.ReadFile(spec.BuildEnvSBOM())
+	if err != nil {
+		return fmt.Errorf("opening build environment SBOM from %s: %w", spec.BuildEnvSBOM(), err)
+	}
+	buildSBOM := spdx.Document{}
+	if err := json.Unmarshal(data, &buildSBOM); err != nil {
+		return fmt.Errorf("unmarshaling build time SBOM: %w", err)
+	}
+
+	// Make sure we have the root package
+	if len(apkSBOM.DocumentDescribes) == 0 {
+		return errors.New("apk package sbom has no root elements")
+	}
+
+	// We know the build time SBOM has only os and OCI packages, we return
+	// all that are not OCI
+	ret := []spdx.Package{}
+	for _, p := range buildSBOM.Packages {
+		if len(p.ExternalRefs) > 0 {
+			for _, e := range p.ExternalRefs {
+				if e.Type == "purl" {
+					pl, err := purl.FromString(e.Locator)
+					// If purls are malformed, just skip
+					if err != nil {
+						continue
+					}
+					if pl.Type == purl.TypeOCI {
+						continue
+					}
+					ret = append(ret, p)
+				}
+			}
+		}
+		// log: XX many packages found in build sbom
+	}
+
+	// Add found packages to the apk SBOM
+	apkSBOM.Packages = append(apkSBOM.Packages, ret...)
+
+	// Add the new packages' relationships
+	rootId := apkSBOM.DocumentDescribes[0]
+	for _, p := range ret {
+		apkSBOM.Relationships = append(apkSBOM.Relationships, spdx.Relationship{
+			Element: p.ID,
+			Type:    "BUILD_DEPENDENCY_OF",
+			Related: rootId,
+		})
+	}
+	return nil
+
+}
+
 // WriteSBOM writes the SBOM to the apk filesystem
 func (di *defaultGeneratorImplementation) WriteSBOM(spec *Spec, doc *bom) error {
 	spdxDoc, err := buildDocumentSPDX(spec, doc)
@@ -436,21 +488,12 @@ func (di *defaultGeneratorImplementation) WriteSBOM(spec *Spec, doc *bom) error 
 		return fmt.Errorf("building SPDX document: %w", err)
 	}
 
-	dirPath, err := filepath.Abs(spec.Path)
-	if err != nil {
-		return fmt.Errorf("getting absolute directory path: %w", err)
+	// Parse the read SBOM
+	if err := di.ParseBuildSBOM(spec, spdxDoc); err != nil {
+		return fmt.Errorf("parsing build environment SBOM: %w", err)
 	}
 
-	apkSBOMdir := "/var/lib/db/sbom"
-	if err := os.MkdirAll(filepath.Join(dirPath, apkSBOMdir), os.FileMode(0755)); err != nil {
-		return fmt.Errorf("creating SBOM directory in apk filesystem: %w", err)
-	}
-
-	apkSBOMpath := filepath.Join(
-		dirPath, apkSBOMdir,
-		fmt.Sprintf("%s-%s.spdx.json", spec.PackageName, spec.PackageVersion),
-	)
-	f, err := os.Create(apkSBOMpath)
+	f, err := os.Create(spec.PackageSBOM())
 	if err != nil {
 		return fmt.Errorf("opening SBOM file for writing: %w", err)
 	}

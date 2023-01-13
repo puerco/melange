@@ -359,12 +359,11 @@ func New(opts ...Option) (*Context, error) {
 	}
 
 	if ctx.buildSBOMPath == "" {
-		path, err := os.CreateTemp("", "build-sbom-*.json.spdx")
+		dir, err := os.MkdirTemp("", "melange-sboms-*")
 		if err != nil {
-			return nil, fmt.Errorf("creating temporary file to hold build env SBOM: %w", err)
+			return nil, fmt.Errorf("creating temporary dir to hold build env SBOM: %w", err)
 		}
-		path.Close() // nolint:errcheck
-		ctx.buildSBOMPath = path.Name()
+		ctx.buildSBOMPath = dir
 	}
 
 	// If no config file is explicitly requested for the build context
@@ -887,10 +886,14 @@ func (ctx *Context) BuildGuest() error {
 		apko_build.WithExtraRepos(ctx.ExtraRepos),
 		apko_build.WithDebugLogging(true),
 		apko_build.WithLocal(true),
+		apko_build.WithSBOM(ctx.buildSBOMPath),
+		apko_build.WithSBOMFormats([]string{"spdx"}),
 	)
 	if err != nil {
 		return fmt.Errorf("unable to create build context: %w", err)
 	}
+
+	bc.Options.WantSBOM = true
 
 	if err := bc.Refresh(); err != nil {
 		return fmt.Errorf("unable to refresh build context: %w", err)
@@ -899,9 +902,11 @@ func (ctx *Context) BuildGuest() error {
 	bc.Summarize()
 
 	if !ctx.Runner.NeedsImage() {
-		if err := bc.BuildImage(); err != nil {
+		layerPath, err := bc.BuildLayer()
+		if err != nil {
 			return fmt.Errorf("unable to generate image: %w", err)
 		}
+		os.Remove(layerPath) //errcheck:nolint
 	} else {
 		if err := ctx.BuildAndPushLocalImage(bc); err != nil {
 			return fmt.Errorf("unable to generate image: %w", err)
@@ -1301,6 +1306,7 @@ func (ctx *Context) BuildPackage() error {
 			Copyright:      ctx.Configuration.Package.FullCopyright(),
 			Namespace:      namespace,
 			Arch:           ctx.Arch.ToAPK(),
+			BuildImageSBOM: ctx.buildSBOMPath,
 		}); err != nil {
 			return fmt.Errorf("writing SBOMs: %w", err)
 		}
@@ -1318,6 +1324,7 @@ func (ctx *Context) BuildPackage() error {
 		Copyright:      ctx.Configuration.Package.FullCopyright(),
 		Namespace:      namespace,
 		Arch:           ctx.Arch.ToAPK(),
+		BuildImageSBOM: ctx.buildSBOMPath,
 	}); err != nil {
 		return fmt.Errorf("writing SBOMs: %w", err)
 	}
